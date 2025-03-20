@@ -14,29 +14,12 @@ using namespace llvm;
 namespace {
 
 struct TestPass : PassInfoMixin<TestPass> {
-  // Main entry point
-  bool runOnFunction(Function &F) {
-    bool Transformed = false;
-  
-    for (auto Iter = F.begin(); Iter != F.end(); ++Iter) {
-      if (runOnBasicBlock(*Iter)) {
-        Transformed = true;
-      }
-    }
-  
-    return Transformed;
-  }
-
-  bool runOnBasicBlock(BasicBlock &B) {
-    
-
-  }
-
+  // Main entry point per il nuovo Pass Manager
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
     bool Transformed = false;
-
-    for (auto Iter = F.begin(); Iter != F.end(); ++Iter) {
-      if (runOnBasicBlock(*Iter)) {
+  
+    for (auto &B : F) {
+      if (runOnBasicBlock(B)) {
         Transformed = true;
       }
     }
@@ -46,7 +29,92 @@ struct TestPass : PassInfoMixin<TestPass> {
     return Transformed ? PreservedAnalyses::none() : PreservedAnalyses::all();
   }
 
-  // This pass is required for functions with optnone attribute.
+  bool runOnBasicBlock(BasicBlock &B) {
+    bool Transformed = false;
+
+    for (auto it = B.begin(); it != B.end(); ) {
+        Instruction *I = &*it++;
+        
+        llvm::errs() << "Analizzando istruzione: " << *I << "\n";
+
+        // Controlla se l'istruzione è un'operazione binaria
+        if (auto *BinOp = dyn_cast<BinaryOperator>(I)) {
+            // Controlla se è un'addizione
+            if (BinOp->getOpcode() == Instruction::Add) {
+                Value *Op1 = BinOp->getOperand(0);
+                Value *Op2 = BinOp->getOperand(1);
+
+                // Controlla se uno degli operandi è una costante 0
+                if (auto *C = dyn_cast<ConstantInt>(Op1)) {
+                    if (C->isZero()) {
+                        // Messaggio di debug
+                        llvm::errs() << "Ottimizzazione: " << *BinOp 
+                                     << " sostituito con " << *Op2 << "\n";
+
+                        // Sostituisci l'istruzione con l'altro operando
+                        BinOp->replaceAllUsesWith(Op2);
+                        BinOp->eraseFromParent();
+                        Transformed = true;
+                        continue;
+                    }
+                }
+
+                if (auto *C = dyn_cast<ConstantInt>(Op2)) {
+                    if (C->isZero()) {
+                        // Messaggio di debug
+                        llvm::errs() << "Ottimizzazione: " << *BinOp 
+                                     << " sostituito con " << *Op1 << "\n";
+
+                        // Sostituisci l'istruzione con l'altro operando
+                        BinOp->replaceAllUsesWith(Op1);
+                        BinOp->eraseFromParent();
+                        Transformed = true;
+                        continue;
+                    }
+                }
+            }
+
+            // Controlla se è una moltiplicazione
+            if (BinOp->getOpcode() == Instruction::Mul) {
+                Value *Op1 = BinOp->getOperand(0);
+                Value *Op2 = BinOp->getOperand(1);
+
+                // Controlla se uno degli operandi è una costante 1
+                if (auto *C = dyn_cast<ConstantInt>(Op1)) {
+                    if (C->isOne()) {
+                        // Messaggio di debug
+                        llvm::errs() << "Ottimizzazione: " << *BinOp 
+                                     << " sostituito con " << *Op2 << "\n";
+
+                        // Sostituisci l'istruzione con l'altro operando
+                        BinOp->replaceAllUsesWith(Op2);
+                        BinOp->eraseFromParent();
+                        Transformed = true;
+                        continue;
+                    }
+                }
+
+                if (auto *C = dyn_cast<ConstantInt>(Op2)) {
+                    if (C->isOne()) {
+                        // Messaggio di debug
+                        llvm::errs() << "Ottimizzazione: " << *BinOp 
+                                     << " sostituito con " << *Op1 << "\n";
+
+                        // Sostituisci l'istruzione con l'altro operando
+                        BinOp->replaceAllUsesWith(Op1);
+                        BinOp->eraseFromParent();
+                        Transformed = true;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    return Transformed;
+  }
+
+  // Questo pass è richiesto per le funzioni con l'attributo optnone
   static bool isRequired() { return true; }
 };
 
