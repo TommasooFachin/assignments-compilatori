@@ -1,0 +1,1 @@
+/Library/Developer/CommandLineTools/usr/bin/c++  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.2.sdk -mmacosx-version-min=14.0 -dynamiclib -Wl,-headerpad_max_install_names -o libalgebraic_identity.dylib -install_name @rpath/libalgebraic_identity.dylib CMakeFiles/algebraic_identity.dir/algebraic_identity.cpp.o  -undefined dynamic_lookup
