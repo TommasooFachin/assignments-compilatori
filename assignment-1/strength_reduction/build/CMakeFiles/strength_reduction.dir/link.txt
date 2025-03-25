@@ -1,0 +1,1 @@
+/Library/Developer/CommandLineTools/usr/bin/c++  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -dynamiclib -Wl,-headerpad_max_install_names -o libstrength_reduction.dylib -install_name @rpath/libstrength_reduction.dylib CMakeFiles/strength_reduction.dir/strength_reduction.cpp.o  -undefined dynamic_lookup
