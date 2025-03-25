@@ -6,5 +6,5 @@ CXX_DEFINES = -Dalgebraic_identity_EXPORTS
 
 CXX_INCLUDES = -isystem /usr/local/opt/llvm/include
 
-CXX_FLAGS = -std=gnu++17 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.2.sdk -mmacosx-version-min=14.0 -fPIC
+CXX_FLAGS = -std=gnu++17 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -fPIC
 

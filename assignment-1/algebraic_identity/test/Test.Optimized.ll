@@ -1,5 +1,5 @@
-; ModuleID = 'FooBis.optimized.bc'
-source_filename = "FooBis.ll"
+; ModuleID = 'Test.ll'
+source_filename = "Test.ll"
 
 define dso_local i32 @foo(i32 noundef %0, i32 noundef %1) {
   %3 = shl i32 %0, 1
