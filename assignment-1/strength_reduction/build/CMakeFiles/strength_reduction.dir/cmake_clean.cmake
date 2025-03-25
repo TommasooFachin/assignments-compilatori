@@ -1,8 +1,8 @@
 file(REMOVE_RECURSE
   "CMakeFiles/strength_reduction.dir/strength_reduction.cpp.o"
   "CMakeFiles/strength_reduction.dir/strength_reduction.cpp.o.d"
-  "libstrength_reduction.dylib"
   "libstrength_reduction.pdb"
+  "libstrength_reduction.so"
 )
 
 # Per-language clean rules from dependency scanning.

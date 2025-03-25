@@ -30,17 +30,17 @@ struct TestPass : PassInfoMixin<TestPass> {
   }
 
   bool runOnBasicBlock(BasicBlock &B) {
-    bool runOnBasicBlock(BasicBlock &B) {
-      bool Changed = false;  // Tiene traccia se il blocco è stato modificato
-      LLVMContext &Context = B.getContext();  // Contesto LLVM per creare costanti
+    bool Changed = false;  // Tiene traccia se il blocco è stato modificato
+    LLVMContext &Context = B.getContext();  // Contesto LLVM per creare costanti
   
-      // Itera su tutte le istruzioni nel Basic Block
-      for (auto &I : B) {
-          // --- Strength Reduction per MOLTIPLICAZIONE (es: 15*x → (x << 4) - x) ---
-          if (auto *Mul = dyn_cast<BinaryOperator>(&I)) {  // Controlla se è un'operazione binaria
-              if (Mul->getOpcode() == Instruction::Mul) {  // Se è una moltiplicazione
-                  Value *LHS = Mul->getOperand(0);  // Primo operando
-                  Value *RHS = Mul->getOperand(1);  // Secondo operando
+    // Itera su tutte le istruzioni nel Basic Block
+    for (auto it = B.begin(); it != B.end(); ) {
+      Instruction *I = &*it++;        
+      // --- Strength Reduction per MOLTIPLICAZIONE (es: 15*x → (x << 4) - x) ---
+      if (auto *BinOp = dyn_cast<BinaryOperator>(I)) {  // Controlla se è un'operazione binaria
+            if (BinOp->getOpcode() == Instruction::Mul) {  // Se è una moltiplicazione
+                  Value *LHS = BinOp->getOperand(0);  // Primo operando
+                  Value *RHS = BinOp->getOperand(1);  // Secondo operando
   
                   // Cerca la costante tra gli operandi (controlla LHS e RHS)
                   ConstantInt *C = dyn_cast<ConstantInt>(LHS);
@@ -52,78 +52,89 @@ struct TestPass : PassInfoMixin<TestPass> {
   
                       // Cerca la potenza di 2 più vicina (es: 15 → 16, 7 → 8)
                       bool IsPowerOfTwoMinusOne = (ConstVal & (ConstVal + 1)) == 0;  // 2^n -1 ?
+                      bool IsPowerOfTwo = (ConstVal & (ConstVal - 1)) == 0;  // 2^n ?
                       
+                      if (!IsPowerOfTwo && !IsPowerOfTwoMinusOne) {
+                          continue;  // Salta se non è una costante 2^n o 2^n -1
+                      }
+                      
+                      int64_t Power = (IsPowerOfTwo) ? ConstVal : ConstVal + 1;  // Calcola 2^n (es: 15+1=16)
+                      int ShiftAmount = 0;  // Contatore per lo shift
+
+                      // Calcola log2(Power) con ciclo semplice (es: 16 → 4)
+                      for (int64_t Temp = 1; Temp < Power; Temp <<= 1) {
+                        ShiftAmount++;
+                      }
+
+                      // Crea l'istruzione SHL (shift left)
+                      Instruction *Shl = BinaryOperator::CreateShl(
+                          VarOp, 
+                          ConstantInt::get(Context, APInt(32, ShiftAmount))
+                      );
+
+                      Shl->insertAfter(BinOp);  // Inserisci SHL dopo MUL
+
                       if (IsPowerOfTwoMinusOne) {  // Se la costante è del tipo 2^n -1
-                          int64_t Power = ConstVal + 1;  // Calcola 2^n (es: 15+1=16)
-                          int ShiftAmount = 0;  // Contatore per lo shift
-                          
-                          // Calcola log2(Power) con ciclo semplice (es: 16 → 4)
-                          for (int64_t Temp = 1; Temp < Power; Temp <<= 1) {
-                              ShiftAmount++;
-                          }
-  
-                          // Crea l'istruzione SHL (shift left)
-                          Value *Shl = BinaryOperator::CreateShl(
-                              VarOp, 
-                              ConstantInt::get(Context, APInt(32, ShiftAmount)), 
-                              "shl", 
-                              Mul
-                          );
-  
-                          // Crea l'istruzione SUB (sottrai la variabile originale)
-                          Value *Sub = BinaryOperator::CreateSub(Shl, VarOp, "sub", Mul);
-                          
-                          // Sostituisci la moltiplicazione con SHL + SUB
-                          Mul->replaceAllUsesWith(Sub);
-                          Mul->eraseFromParent();  // Rimuovi la vecchia istruzione
-                          Changed = true;
+                        // Crea l'istruzione SUB (sottrai la variabile originale)
+                        Instruction *Sub = BinaryOperator::CreateSub(Shl, VarOp);
+                        Sub->insertAfter(Shl);  // Inserisci SUB dopo SHL
+                        // Sostituisci la moltiplicazione con SHL + SUB
+                        BinOp->replaceAllUsesWith(Sub);
+                      } else {
+                        // Sostituisci la moltiplicazione con SHL
+                        BinOp->replaceAllUsesWith(Shl);
                       }
+                      BinOp->eraseFromParent();  // Rimuovi la vecchia istruzione
+                      Changed = true; // Indica che il blocco è stato modificato
                   }
-              }
-          }
-  
-          // --- Strength Reduction per DIVISIONE (es: x/8 → x >> 3) ---
-          if (auto *Div = dyn_cast<BinaryOperator>(&I)) {  // Controlla se è una divisione
-              if (Div->getOpcode() == Instruction::SDiv || Div->getOpcode() == Instruction::UDiv) {
-                  Value *RHS = Div->getOperand(1);  // Secondo operando (divisore)
-                  
-                  if (auto *C = dyn_cast<ConstantInt>(RHS)) {  // Se il divisore è una costante
-                      int64_t ConstVal = C->getSExtValue();
-                      
-                      // Controlla se la costante è una potenza di 2 positiva
-                      if (ConstVal > 0 && (ConstVal & (ConstVal - 1)) == 0) {  // 2^n ?
-                          int ShiftAmount = 0;  // Contatore per lo shift
-                          
-                          // Calcola log2(ConstVal) con ciclo semplice (es: 8 → 3)
-                          for (int64_t Temp = 1; Temp < ConstVal; Temp <<= 1) {
-                              ShiftAmount++;
-                          }
-  
-                          // Crea l'istruzione SHR (shift right)
-                          Value *Shr = BinaryOperator::CreateLShr(
-                              Div->getOperand(0),  // Dividendo
-                              ConstantInt::get(Context, APInt(32, ShiftAmount)), 
-                              "shr", 
-                              Div
-                          );
-                          
-                          // Sostituisci la divisione con SHR
-                          Div->replaceAllUsesWith(Shr);
-                          Div->eraseFromParent();  // Rimuovi la vecchia istruzione
-                          Changed = true;
-                      }
-                  }
+             }
+
+             // --- Strength Reduction per DIVISIONE (es: x/8 → x >> 3) ---
+             if (BinOp->getOpcode() == Instruction::SDiv || BinOp->getOpcode() == Instruction::UDiv)
+             {
+               Value *RHS = BinOp->getOperand(1); // Secondo operando (divisore)
+
+               if (auto *C = dyn_cast<ConstantInt>(RHS))
+               { // Se il divisore è una costante
+                 int64_t ConstVal = C->getSExtValue();
+
+                 // Controlla se la costante è una potenza di 2 positiva
+                 if (ConstVal > 0 && (ConstVal & (ConstVal - 1)) == 0)
+                 {                      // 2^n ?
+                   int ShiftAmount = 0; // Contatore per lo shift
+
+                   // Calcola log2(ConstVal) con ciclo semplice (es: 8 → 3)
+                   for (int64_t Temp = 1; Temp < ConstVal; Temp <<= 1)
+                   {
+                     ShiftAmount++;
+                   }
+
+                   // Crea l'istruzione SHR (shift right)
+                   Instruction *Shr = BinaryOperator::CreateLShr(
+                    BinOp->getOperand(0), // Dividendo
+                       ConstantInt::get(Context, APInt(32, ShiftAmount)));
+
+                   // insert shr after div
+                   Shr->insertAfter(BinOp);
+
+                   // Sostituisci la divisione con SHR
+                   BinOp->replaceAllUsesWith(Shr);
+                   BinOp->eraseFromParent(); // Rimuovi la vecchia istruzione
+                   Changed = true;
+                 }
+               }
               }
           }
       }
       return Changed;  // Indica se il Basic Block è stato modificato
-  }  }
+    }  
+  };
 
   // Questo pass è richiesto per le funzioni con l'attributo optnone
   static bool isRequired() { return true; }
+
 };
 
-} // namespace
 
 //-----------------------------------------------------------------------------
 // New PM Registration
