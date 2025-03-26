@@ -1,0 +1,1 @@
+/Library/Developer/CommandLineTools/usr/bin/c++  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX15.2.sdk -mmacosx-version-min=14.7 -dynamiclib -Wl,-headerpad_max_install_names -o libmulti_istruction_opt.dylib -install_name @rpath/libmulti_istruction_opt.dylib CMakeFiles/multi_istruction_opt.dir/multi_istruction_opt.cpp.o  -undefined dynamic_lookup

@@ -37,5 +37,5 @@ add_library(multi_istruction_opt SHARED multi_istruction_opt.cpp)
 
 # Allow undefined symbols in shared objects on Darwin (this is the default
 # behaviour on Linux)
-target_link_libraries(algebraic_identity
+target_link_libraries(multi_istruction_opt
   "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

@@ -1,0 +1,9 @@
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/intrinsics_gen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/omp_gen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/acc_gen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/ARMTargetParserTableGen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/AArch64TargetParserTableGen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/RISCVTargetParserTableGen.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/multi_istruction_opt.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/edit_cache.dir
+/Users/aimen/Documents/assignments-compilatori/assignment-1/multi-instruction_opt/build/CMakeFiles/rebuild_cache.dir
