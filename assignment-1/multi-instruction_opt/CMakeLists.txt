@@ -33,7 +33,7 @@ endif()
 #===============================================================================
 # 3. ADD THE TARGET
 #===============================================================================
-add_library(algebraic_identity SHARED algebraic_identity.cpp)
+add_library(multi_istruction_opt SHARED multi_istruction_opt.cpp)
 
 # Allow undefined symbols in shared objects on Darwin (this is the default
 # behaviour on Linux)
