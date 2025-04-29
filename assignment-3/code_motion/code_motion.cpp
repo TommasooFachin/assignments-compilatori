@@ -6,9 +6,8 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Analysis/LoopInfo.h"
-// #include "llvm/Analysis/LoopInfoWrapperPass.h"
 #include "llvm/IR/Dominators.h"
-
+#include <set>
 
 using namespace llvm;
 
@@ -39,18 +38,16 @@ struct TestPass : PassInfoMixin<TestPass> {
         SmallVector<BasicBlock *, 4> ExitBlocks;
         L->getExitBlocks(ExitBlocks);
 
+        std::set<Instruction *> MovedInstructions;
+
         // Esegui una ricerca depth-first sui blocchi del loop
         for (BasicBlock *BB : L->blocks()) {
             for (Instruction &I : *BB) {
-                // Controlla se l'istruzione è loop-invariant
-                if (isLoopInvariant(I, L)) {
-                    // Controlla se il blocco domina tutte le uscite del loop
-                    if (dominatesAllExits(BB, ExitBlocks, DT)) {
-                        // Sposta l'istruzione nel preheader
-                        I.moveBefore(Preheader->getTerminator());
-                        errs() << "Moved instruction: " << I << "\n";
-                        Changed = true;
-                    }
+                if (isCandidateForCodeMotion(I, L, ExitBlocks, DT, MovedInstructions)) {
+                    I.moveBefore(Preheader->getTerminator());
+                    MovedInstructions.insert(&I);
+                    errs() << "Moved instruction: " << I << "\n";
+                    Changed = true;
                 }
             }
         }
@@ -61,10 +58,6 @@ struct TestPass : PassInfoMixin<TestPass> {
 
   // Funzione per verificare se un'istruzione è loop-invariant
   bool isLoopInvariant(Instruction &I, Loop *L) {
-      // // Controlla se l'istruzione è sicura da eseguire speculativamente
-      // if (!I.isSafeToSpeculativelyExecute())
-      //     return false;
-
       // Controlla se tutte le dipendenze dell'istruzione sono definite fuori dal loop
       for (Value *Op : I.operands()) {
           if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
@@ -85,8 +78,61 @@ struct TestPass : PassInfoMixin<TestPass> {
       return true;
   }
 
-  
-  };
+  bool isReassignedInLoop(Instruction &I, Loop *L) {
+      if (StoreInst *Store = dyn_cast<StoreInst>(&I)) {
+          Value *Ptr = Store->getPointerOperand();
+          for (BasicBlock *BB : L->blocks()) {
+              for (Instruction &Inst : *BB) {
+                  if (&Inst != &I && isa<StoreInst>(&Inst)) {
+                      if (cast<StoreInst>(&Inst)->getPointerOperand() == Ptr)
+                          return true;
+                  }
+              }
+          }
+      }
+      return false;
+  }
+
+  bool dominatesAllUses(Instruction &I, Loop *L, DominatorTree &DT) {
+      for (User *U : I.users()) {
+          if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
+              if (L->contains(UserInst->getParent())) {
+                  if (!DT.dominates(I.getParent(), UserInst->getParent()))
+                      return false;
+              }
+          }
+      }
+      return true;
+  }
+
+  bool allDependenciesMoved(Instruction &I, const std::set<Instruction *> &MovedInstructions) {
+      for (Value *Op : I.operands()) {
+          if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
+              if (MovedInstructions.find(Inst) == MovedInstructions.end())
+                  return false;
+          }
+      }
+      return true;
+  }
+
+  bool isCandidateForCodeMotion(Instruction &I, Loop *L, const SmallVectorImpl<BasicBlock *> &ExitBlocks, DominatorTree &DT, const std::set<Instruction *> &MovedInstructions) {
+      if (!isLoopInvariant(I, L))
+          return false;
+
+      if (!dominatesAllExits(I.getParent(), ExitBlocks, DT))
+          return false;
+
+      if (isReassignedInLoop(I, L))
+          return false;
+
+      if (!dominatesAllUses(I, L, DT))
+          return false;
+
+      if (!allDependenciesMoved(I, MovedInstructions))
+          return false;
+
+      return true;
+  }
 
   // Questo pass è richiesto per le funzioni con l'attributo optnone
   static bool isRequired() { return true; }
@@ -117,3 +163,5 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return getTestPassPluginInfo();
 }
+
+} // namespace
