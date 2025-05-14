@@ -1,0 +1,9 @@
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/intrinsics_gen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/omp_gen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/acc_gen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/ARMTargetParserTableGen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/AArch64TargetParserTableGen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/RISCVTargetParserTableGen.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/loop_fusion.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/edit_cache.dir
+/home/elioc/Laboratori_Compilatori/assignments-compilatori/assignment-4/loop_fusion/build/CMakeFiles/rebuild_cache.dir
