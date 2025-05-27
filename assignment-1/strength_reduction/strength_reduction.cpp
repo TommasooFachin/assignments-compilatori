@@ -36,9 +36,11 @@ struct TestPass : PassInfoMixin<TestPass> {
     // Itera su tutte le istruzioni nel Basic Block
     for (auto it = B.begin(); it != B.end(); ) {
       Instruction *I = &*it++;        
-      // --- Strength Reduction per MOLTIPLICAZIONE (es: 15*x → (x << 4) - x) ---
-      if (auto *BinOp = dyn_cast<BinaryOperator>(I)) {  // Controlla se è un'operazione binaria
-            if (BinOp->getOpcode() == Instruction::Mul) {  // Se è una moltiplicazione
+      // Controlla se l'istruzione è binaria
+      if (auto *BinOp = dyn_cast<BinaryOperator>(I)) {  
+          
+          // --- Strength Reduction per MOLTIPLICAZIONE (es: x*8 -> x << 3, x*15 -> (x << 4) - x) ---
+            if (BinOp->getOpcode() == Instruction::Mul) { 
                   Value *LHS = BinOp->getOperand(0);  // Primo operando
                   Value *RHS = BinOp->getOperand(1);  // Secondo operando
   
@@ -46,8 +48,10 @@ struct TestPass : PassInfoMixin<TestPass> {
                   ConstantInt *C = dyn_cast<ConstantInt>(LHS);
                   if (!C) C = dyn_cast<ConstantInt>(RHS);
                   
-                  if (C) {  // Se uno degli operandi è una costante
-                      int64_t ConstVal = C->getSExtValue();  // Valore numerico della costante
+                  // Se uno degli operandi è una costante
+                  if (C) {  
+                      // ottiene il valore della costante estendendo a 64 bit signed
+                      int64_t ConstVal = C->getSExtValue();  
                       Value *VarOp = (C == LHS) ? RHS : LHS;  // Seleziona l'operando variabile
   
                       // Cerca la potenza di 2 più vicina (es: 15 → 16, 7 → 8)
@@ -62,6 +66,8 @@ struct TestPass : PassInfoMixin<TestPass> {
                       int ShiftAmount = 0;  // Contatore per lo shift
 
                       // Calcola log2(Power) con ciclo semplice (es: 16 → 4)
+                      // Il ciclo lo facciamo partire da 1 ed usiamo l'operatore <
+                      // potremmo anche fare partire da 2 ed usare l'operatore <=
                       for (int64_t Temp = 1; Temp < Power; Temp <<= 1) {
                         ShiftAmount++;
                       }
@@ -74,14 +80,14 @@ struct TestPass : PassInfoMixin<TestPass> {
 
                       Shl->insertAfter(BinOp);  // Inserisci SHL dopo MUL
 
+                      // Se la costante è del tipo 2^n -1, crea l'istruzione SUB
+                      // e la inserisce dopo SHL
+                      // infine elimina la vecchia istruzione MUL
                       if (IsPowerOfTwoMinusOne) {  // Se la costante è del tipo 2^n -1
-                        // Crea l'istruzione SUB (sottrai la variabile originale)
                         Instruction *Sub = BinaryOperator::CreateSub(Shl, VarOp);
                         Sub->insertAfter(Shl);  // Inserisci SUB dopo SHL
-                        // Sostituisci la moltiplicazione con SHL + SUB
                         BinOp->replaceAllUsesWith(Sub);
                       } else {
-                        // Sostituisci la moltiplicazione con SHL
                         BinOp->replaceAllUsesWith(Shl);
                       }
                       BinOp->eraseFromParent();  // Rimuovi la vecchia istruzione
@@ -90,12 +96,15 @@ struct TestPass : PassInfoMixin<TestPass> {
              }
 
              // --- Strength Reduction per DIVISIONE (es: x/8 → x >> 3) ---
+             // SDiv = Signed Division, UDiv = Unsigned Division
              if (BinOp->getOpcode() == Instruction::SDiv || BinOp->getOpcode() == Instruction::UDiv)
              {
                Value *RHS = BinOp->getOperand(1); // Secondo operando (divisore)
 
+               // Se il divisore è una costante
                if (auto *C = dyn_cast<ConstantInt>(RHS))
-               { // Se il divisore è una costante
+               { 
+                // ottiene il valore della costante estendendo a 64 bit signed
                  int64_t ConstVal = C->getSExtValue();
 
                  // Controlla se la costante è una potenza di 2 positiva

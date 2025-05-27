@@ -426,4 +426,6 @@ CMakeFiles/loop_fusion.dir/loop_fusion.cpp.o: \
  /usr/include/llvm-19/llvm/Passes/PassPlugin.h \
  /usr/include/llvm-19/llvm/Support/DynamicLibrary.h \
  /usr/include/llvm-19/llvm/IR/Dominators.h \
- /usr/include/llvm-19/llvm/ADT/DepthFirstIterator.h
+ /usr/include/llvm-19/llvm/ADT/DepthFirstIterator.h \
+ /usr/include/llvm-19/llvm/Analysis/PostDominators.h \
+ /usr/include/llvm-19/llvm/Analysis/DependenceAnalysis.h

@@ -7,6 +7,9 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 #include <set>
 
 using namespace llvm;
@@ -24,6 +27,9 @@ struct TestPass : PassInfoMixin<TestPass> {
     // Ottieni LoopInfo e DominatorTree
     auto &LI = FAM.getResult<LoopAnalysis>(F);
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+    auto &PDT = FAM.getResult<PostDominatorTreeAnalysis>(F);
+    auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+    auto &DI = FAM.getResult<DependenceAnalysis>(F);
 
     bool Changed = false;
 
@@ -31,16 +37,17 @@ struct TestPass : PassInfoMixin<TestPass> {
     SmallVector<Loop *, 8> Worklist;
     errs() << "Iterating over loops in the function...\n";
     for (Loop *TopLevelLoop : LI) {
-        errs() << "Top-level loop found.\n";
-        for (Loop *L : depth_first(TopLevelLoop)) {
-            errs() << "Processing loop...\n";
-            // We only handle inner-most loops.
-            if (L->isInnermost()) {
-                errs() << "Innermost loop added to worklist.\n";
-                Worklist.push_back(L);
+    for (Loop *L : depth_first(TopLevelLoop)) {
+        if (L->isInnermost()) {
+            Worklist.push_back(L);
             }
         }
     }
+
+    // Ordina i loop secondo l'ordine di dominanza
+    llvm::sort(Worklist, [&](Loop *A, Loop *B) {
+        return DT.dominates(A->getHeader(), B->getHeader());
+    });
 
     errs() << "Checking adjacent loops for fusion...\n";
     for (size_t i = 0; i + 1 < Worklist.size(); ++i) {
@@ -53,6 +60,31 @@ struct TestPass : PassInfoMixin<TestPass> {
         } else {
             errs() << "Loop " << i << " and Loop " << i + 1 << " are NOT adjacent.\n";
         }
+
+        if (areControlFlowEquivalent(L0, L1, DT, PDT)) {
+            errs() << "Loop " << i << " and Loop " << i + 1 << " are control flow equivalent.\n";
+            Changed = true;
+        } else {
+            Changed = false;
+            errs() << "Loop " << i << " and Loop " << i + 1 << " are NOT control flow equivalent.\n";
+        }
+
+        if (equalTripCount(L0, L1, SE)) {
+            errs() << "Loop " << i << " and Loop " << i + 1 << " have equal trip count.\n";
+            Changed = true;
+        } else {
+            Changed = false;
+            errs() << "Loop " << i << " and Loop " << i + 1 << " do NOT have equal trip count.\n";
+        }
+
+        // auto dep = DI.depends(&L0, &L1, true);
+        // if(dep) {
+        //     errs() << "Loop " << i << " and Loop " << i + 1 << " have dependencies.\n";
+        //     Changed = true; // Se ci sono dipendenze, non possiamo fondere i loop
+        // } else {
+        //     errs() << "Loop " << i << " and Loop " << i + 1 << " have no dependencies.\n";
+        //     Changed = false; // Se non ci sono dipendenze, possiamo considerare la fusione
+        // }
     }
 
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
@@ -70,7 +102,7 @@ bool areLoopsAdjacent(Loop *L0, Loop *L1, DominatorTree &DT) {
     }
 
     L0Exit = ExitBlocks[0];
-    errs() << "Loop 0 exit block: " << L0Exit->getName() << "\n";
+    // errs() << "Loop 0 exit block: " << L0Exit->getName() << "\n";
 
     BasicBlock *L1Preheader = L1->getLoopPreheader();
     if (!L1Preheader) {
@@ -78,7 +110,20 @@ bool areLoopsAdjacent(Loop *L0, Loop *L1, DominatorTree &DT) {
         return false;
     }
 
-    errs() << "Loop 1 preheader: " << L1Preheader->getName() << "\n";
+    errs() << "Loop 0 exit block:\n";
+    L0Exit->print(errs());
+    errs() << "\n";
+
+    errs() << "Loop 1 preheader:\n";
+    L1Preheader->print(errs());
+    errs() << "\n";
+
+    if (L0Exit == L1Preheader) {
+        errs() << "L0Exit and L1Preheader are the SAME block! Loops are adjacent.\n";
+        return true;
+    }
+
+    // errs() << "Loop 1 preheader: " << L1Preheader->getName() << "\n";
 
     // Verifica se l'exit block di L0 è direttamente connesso al preheader di L1
     for (BasicBlock *Succ : successors(L0Exit)) {
@@ -93,9 +138,40 @@ bool areLoopsAdjacent(Loop *L0, Loop *L1, DominatorTree &DT) {
     return false;
 }
 
+bool areControlFlowEquivalent(Loop *L0, Loop *L1, DominatorTree &DT, PostDominatorTree &PDT) {
+    BasicBlock *H0 = L0->getHeader();
+    BasicBlock *H1 = L1->getHeader();
+
+    // Condizione dalla slide
+    if (DT.dominates(H0, H1) && PDT.dominates(H1, H0)) {
+        errs() << "Loops are control flow equivalent.\n";
+        return true;
+    }
+
+    errs() << "Loops are NOT control flow equivalent.\n";
+    return false;
+}
+
+bool equalTripCount(Loop *L0, Loop *L1, ScalarEvolution &SE) {
+    // Controlla se i loop hanno lo stesso trip count
+    auto TC0 = SE.getSmallConstantTripCount(L0);
+    auto TC1 = SE.getSmallConstantTripCount(L1);
+
+    errs() << "Trip count for Loop 0: " << (TC0) << "\n";
+    errs() << "Trip count for Loop 1: " << (TC1) << "\n";
+
+    if (TC0 && TC1) {
+        return true;
+    }
+    return false;
+}
+
+
   static bool isRequired() { return true; }
 
 };
+
+
 
 
 //-----------------------------------------------------------------------------
