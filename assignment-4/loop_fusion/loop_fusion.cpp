@@ -10,6 +10,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <set>
 
 using namespace llvm;
@@ -37,11 +38,11 @@ struct TestPass : PassInfoMixin<TestPass> {
     SmallVector<Loop *, 8> Worklist;
     errs() << "Iterating over loops in the function...\n";
     for (Loop *TopLevelLoop : LI) {
-    for (Loop *L : depth_first(TopLevelLoop)) {
-        if (L->isInnermost()) {
-            Worklist.push_back(L);
+        for (Loop *L : depth_first(TopLevelLoop)) {
+            if (L->isInnermost()) {
+                Worklist.push_back(L);
+                }
             }
-        }
     }
 
     // Ordina i loop secondo l'ordine di dominanza
@@ -54,37 +55,24 @@ struct TestPass : PassInfoMixin<TestPass> {
         Loop *L0 = Worklist[i];
         Loop *L1 = Worklist[i + 1];
 
-        if (areLoopsAdjacent(L0, L1, DT)) {
-            errs() << "Loop " << i << " and Loop " << i + 1 << " are adjacent.\n";
-            Changed = true;
-        } else {
-            errs() << "Loop " << i << " and Loop " << i + 1 << " are NOT adjacent.\n";
-        }
-
-        if (areControlFlowEquivalent(L0, L1, DT, PDT)) {
-            errs() << "Loop " << i << " and Loop " << i + 1 << " are control flow equivalent.\n";
-            Changed = true;
-        } else {
-            Changed = false;
-            errs() << "Loop " << i << " and Loop " << i + 1 << " are NOT control flow equivalent.\n";
-        }
-
-        if (equalTripCount(L0, L1, SE)) {
-            errs() << "Loop " << i << " and Loop " << i + 1 << " have equal trip count.\n";
-            Changed = true;
-        } else {
-            Changed = false;
-            errs() << "Loop " << i << " and Loop " << i + 1 << " do NOT have equal trip count.\n";
-        }
-
-        // auto dep = DI.depends(&L0, &L1, true);
-        // if(dep) {
-        //     errs() << "Loop " << i << " and Loop " << i + 1 << " have dependencies.\n";
-        //     Changed = true; // Se ci sono dipendenze, non possiamo fondere i loop
-        // } else {
-        //     errs() << "Loop " << i << " and Loop " << i + 1 << " have no dependencies.\n";
-        //     Changed = false; // Se non ci sono dipendenze, possiamo considerare la fusione
-        // }
+        if( areLoopsAdjacent(L0,L1,DT) && 
+            areControlFlowEquivalent(L0, L1, DT, PDT) && 
+            equalTripCount(L0, L1, SE) &&
+            controlDependencies(L0, L1, DI) ) 
+            {
+                //loop fusion logic 
+                errs() << "Loop " << i << " and Loop " << i + 1 << " can be fused.\n";
+                
+                bool fused = fuseLoops(L0, L1, LI);
+                
+                if (fused) {
+                    Changed = true;
+                    EliminateUnreachableBlocks(F);
+                    errs() << "Successfully fused loops " << i << " and " << i + 1 << ".\n";
+                } else {
+                    errs() << "Failed to fuse loops " << i << " and " << i + 1 << ".\n";
+                }
+            }
     }
 
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
@@ -157,6 +145,9 @@ bool equalTripCount(Loop *L0, Loop *L1, ScalarEvolution &SE) {
     auto TC0 = SE.getSmallConstantTripCount(L0);
     auto TC1 = SE.getSmallConstantTripCount(L1);
 
+    // const SCEV *TripCount = SE.getBackedgeTakenCount(L0);
+    // errs() << "TripCount SCEV: " << *TripCount << "\n";
+
     errs() << "Trip count for Loop 0: " << (TC0) << "\n";
     errs() << "Trip count for Loop 1: " << (TC1) << "\n";
 
@@ -166,6 +157,121 @@ bool equalTripCount(Loop *L0, Loop *L1, ScalarEvolution &SE) {
     return false;
 }
 
+bool controlDependencies(Loop *L0, Loop *L1, DependenceInfo &DI) {
+    // Controlla le dipendenze tra tutte le istruzioni dei due loop
+    for (BasicBlock *BB0 : L0->blocks()) {
+        for (Instruction &I0 : *BB0) {
+            for (BasicBlock *BB1 : L1->blocks()) {
+                for (Instruction &I1 : *BB1) {
+                    if (auto D = DI.depends(&I0, &I1, true)) {
+                        if (D->isConfused() || D->isOrdered()) {
+                            errs() << "Found problematic dependency:\n";
+                            I0.print(errs());
+                            errs() << "\n  and\n";
+                            I1.print(errs());
+                            errs() << "\n";
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+BasicBlock *resolveEffectivePreheader(BasicBlock *Exit, BasicBlock *L1Header) {
+    // Se Exit ha un solo successore
+    if (Exit->getTerminator()->getNumSuccessors() == 1) {
+        BasicBlock *Succ = Exit->getTerminator()->getSuccessor(0);
+        // Se anche Succ ha un solo successore, ed è L1Header
+        if (Succ->getTerminator()->getNumSuccessors() == 1 &&
+            Succ->getTerminator()->getSuccessor(0) == L1Header) {
+            return Succ;
+        }
+    }
+    return Exit; // altrimenti, l'uscita è già il preheader
+}
+
+BasicBlock *getEntryBlock(Loop *L) {
+        if (!L) return nullptr;
+        BasicBlock *PreHeader = L->getLoopPreheader();
+        if (!PreHeader) return nullptr;
+        if(!L->isGuarded()) {
+            return PreHeader;
+        } 
+        return PreHeader->getUniqueSuccessor();
+}
+
+BasicBlock *getBody(Loop *L) {
+    return (dyn_cast<BranchInst>(L->getHeader()->getTerminator()))->getSuccessor(0);
+}
+
+bool fuseLoops(Loop *L0, Loop *L1, LoopInfo &LI) {
+     // Get the body of L1 to be inserted in L0
+        BasicBlock* Body1 = getBody(L1);
+
+        // Exit block of L1 is the entry block of L0
+        BasicBlock* Exit0 = getEntryBlock(L0);
+        BasicBlock* Latch0 = L0->getLoopLatch();
+        BasicBlock* Header0 = L0->getHeader();
+
+        BasicBlock* Exit1 = L1->getExitBlock();
+        BasicBlock* Latch1 = L1->getLoopLatch();
+        BasicBlock* Header1 = L1->getHeader();
+
+    if (!Header0 || !Header1 || !Latch0 || !Latch1) {
+        errs() << "One of the key blocks is missing\n";
+        return false;
+    }
+
+    // 1. Modificare gli usi della induction variable nel body del
+    // loop 1 con quelli della induction variable del loop 0
+    // Trova le IV (phi node) nei due header
+    PHINode *IV0 = dyn_cast<PHINode>(&Header0->front());
+    PHINode *IV1 = dyn_cast<PHINode>(&Header1->front());
+    if (!IV0 || !IV1) {
+        errs() << "Failed to find induction variables\n";
+        return false;
+    }
+    // Rimpiazza tutti gli usi dell'induction variable di L1 con quella di L0
+    IV1->replaceAllUsesWith(IV0);
+
+    //Link the terminator of the header of L0 to the body of L1
+    Header0->getTerminator()->replaceUsesOfWith(Exit0, Exit1);
+
+    // Predecessor blocks of Latch0 must now have Body1 as successor
+    for (BasicBlock *Pred : predecessors(Latch0)) {
+        // Replace the successor of the predecessor with Body1
+        Pred->getTerminator()->replaceUsesOfWith(Latch0, Body1);
+    }
+
+    // I blocchi predecessori di Latch1 devono ora avere Latch0 come successore
+    for (BasicBlock *Pred : predecessors(Latch1)) {
+        // Replace the successor of the predecessor with Latch0
+        Pred->getTerminator()->replaceUsesOfWith(Latch1, Latch0);
+    }
+
+    //aggiungi i blocchi di L1 al loop di L0
+    for (BasicBlock *BB : L1->blocks()) {
+        if (BB != Header1 && BB != Latch1) {
+            L0->addBasicBlockToLoop(BB, LI);
+        }
+    }
+
+    LI.erase(L1); // Elimina il loop L1 dalla LoopInfo
+    
+    // Controlla che L1 non ci sia più nella LoopInfo
+    for (auto &L : LI) {
+        if (L == L1) {
+            errs() << "ERROR: Loop L1 still found in LoopInfo!\n";
+            break;
+        }
+    }
+    errs() << "Confirmed: Loop L1 removed from LoopInfo.\n";
+
+    return true;
+}
 
   static bool isRequired() { return true; }
 
