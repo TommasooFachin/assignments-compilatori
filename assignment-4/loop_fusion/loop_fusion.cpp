@@ -55,7 +55,10 @@ struct TestPass : PassInfoMixin<TestPass> {
         Loop *L0 = Worklist[i];
         Loop *L1 = Worklist[i + 1];
 
-        if( areLoopsAdjacent(L0,L1,DT) && 
+        if(!isLoopFusionCandidate(L0) || !isLoopFusionCandidate(L1)) 
+            continue;
+
+        if( areLoopsAdjacent(L0,L1,DT,LI) && 
             areControlFlowEquivalent(L0, L1, DT, PDT) && 
             equalTripCount(L0, L1, SE) &&
             controlDependencies(L0, L1, DI) ) 
@@ -78,51 +81,70 @@ struct TestPass : PassInfoMixin<TestPass> {
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
-bool areLoopsAdjacent(Loop *L0, Loop *L1, DominatorTree &DT) {
-    errs() << "Checking if loops are adjacent...\n";
-    BasicBlock *L0Exit = nullptr;
-    SmallVector<BasicBlock *, 8> ExitBlocks;
-    L0->getExitBlocks(ExitBlocks);
+bool isLoopFusionCandidate(Loop* L){
+        // Check if the loop has a preheader, header, latch, exiting block and exit block
+        if (!L->getLoopPreheader() || !L->getHeader() || !L->getLoopLatch() || !L->getExitingBlock() || !L->getExitBlock()) {
+            outs()<<"Loop is not a candidate for fusion\n";
+            return false;
+        } 
 
-    if (ExitBlocks.size() != 1) {
-        errs() << "Loop 0 has more than one exit block. Not supported.\n";
-        return false; // supportiamo solo loop con un'unica uscita
-    }
-
-    L0Exit = ExitBlocks[0];
-    // errs() << "Loop 0 exit block: " << L0Exit->getName() << "\n";
-
-    BasicBlock *L1Preheader = L1->getLoopPreheader();
-    if (!L1Preheader) {
-        errs() << "Loop 1 does not have a preheader. Not adjacent.\n";
-        return false;
-    }
-
-    errs() << "Loop 0 exit block:\n";
-    L0Exit->print(errs());
-    errs() << "\n";
-
-    errs() << "Loop 1 preheader:\n";
-    L1Preheader->print(errs());
-    errs() << "\n";
-
-    if (L0Exit == L1Preheader) {
-        errs() << "L0Exit and L1Preheader are the SAME block! Loops are adjacent.\n";
+        // Check if the loop is in a simplified form
+        if (!L->isLoopSimplifyForm()) {
+            outs()<<"Loop is not in a simplified form\n";
+            return false;
+        }
         return true;
+}
+
+bool areLoopsAdjacent(Loop *L0, Loop *L1, DominatorTree &DT, LoopInfo &LI) {
+    errs() << "Checking if loops are adjacent...\n";
+
+    errs() << "L0 is guarded: " << L0->isGuarded() << "\n";
+    errs() << "L1 is guarded: " << L1->isGuarded() << "\n";
+
+    BasicBlock *B0 = getEntryBlock(L0);
+    BasicBlock *B1 = getEntryBlock(L1);
+
+    errs() << "Entry block of L1: " << *B1 << "\n";
+
+    if(L0->isGuarded()) {
+        // Il successore non loop del guard branch di L0 deve essere l'entry block di L1
+        BranchInst *B0Guard = dyn_cast<BranchInst>(B0->getTerminator());
+
+        if(!B0Guard || B0Guard->isUnconditional())  return false;
+
+        for(unsigned i = 0; i < B0Guard->getNumSuccessors(); i++)
+            if(B0Guard->getSuccessor(i) == B1)
+                return true;
     }
 
-    // errs() << "Loop 1 preheader: " << L1Preheader->getName() << "\n";
+    SmallVector<BasicBlock*,4> ExitBlocks;
+    L0->getExitingBlocks(ExitBlocks);
 
-    // Verifica se l'exit block di L0 è direttamente connesso al preheader di L1
-    for (BasicBlock *Succ : successors(L0Exit)) {
-        errs() << "Checking successor of Loop 0 exit block: " << Succ->getName() << "\n";
-        if (Succ == L1Preheader) {
-            errs() << "Loop 0 exit block is connected to Loop 1 preheader. Loops are adjacent.\n";
-            return true;
+    for(BasicBlock *ExitBlock: ExitBlocks) {
+        errs() << "Exiting Block of L0: " << *ExitBlock << "\n";
+        Instruction *Term = ExitBlock->getTerminator();
+        errs() << " with terminator: " << *Term << "\n";
+        for(unsigned i = 0; i < Term->getNumSuccessors(); i++) {
+            errs() << "Successor " << i << ": " << *(Term->getSuccessor(i)) << "\n";
+            BasicBlock *succ = Term->getSuccessor(i);
+            if(L0 != LI.getLoopFor(succ) && succ != B1) {
+                errs() << "Successor of ExitBlock " <<i<< " is not the entry block of L1\n";
+                return false;
+            }
         }
     }
 
-    errs() << "Loop 0 exit block is NOT connected to Loop 1 preheader. Loops are NOT adjacent.\n";
+    //Controlla che nel preheader di L1 ossia B1 sia presente solo la branch NON condizionale
+    if(B1->size() == 1) {
+        if (const auto *BI = dyn_cast<BranchInst>(B1->getTerminator())) {
+            errs() << "Preheader of Loop1 doesn't contain only a branch instrucion.\n";
+            return BI->isUnconditional();
+        }
+
+    } 
+      
+    errs() << "Loops are not adjacent\n";
     return false;
 }
 
@@ -142,17 +164,19 @@ bool areControlFlowEquivalent(Loop *L0, Loop *L1, DominatorTree &DT, PostDominat
 
 bool equalTripCount(Loop *L0, Loop *L1, ScalarEvolution &SE) {
     // Controlla se i loop hanno lo stesso trip count
-    auto TC0 = SE.getSmallConstantTripCount(L0);
-    auto TC1 = SE.getSmallConstantTripCount(L1);
+    // auto TC0 = SE.getSmallConstantTripCount(L0);
+    // auto TC1 = SE.getSmallConstantTripCount(L1);
 
-    // const SCEV *TripCount = SE.getBackedgeTakenCount(L0);
-    // errs() << "TripCount SCEV: " << *TripCount << "\n";
+    auto TC0 = SE.getTripCountFromExitCount(SE.getExitCount(L0, L0->getExitingBlock()));
+    auto TC1 = SE.getTripCountFromExitCount(SE.getExitCount(L1, L1->getExitingBlock()));
 
-    errs() << "Trip count for Loop 0: " << (TC0) << "\n";
-    errs() << "Trip count for Loop 1: " << (TC1) << "\n";
+    errs() << "Trip count for Loop 0: " << (&TC0) << "\n";
+    errs() << "Trip count for Loop 1: " << (&TC1) << "\n";
 
-    if (TC0 && TC1) {
+    if (TC0 && TC1 && TC0 == TC1) {
         return true;
+    } else {
+        errs() << "Trip counts are not equal, loops cannot be fused\n";
     }
     return false;
 }
@@ -208,67 +232,73 @@ BasicBlock *getBody(Loop *L) {
 }
 
 bool fuseLoops(Loop *L0, Loop *L1, LoopInfo &LI) {
-     // Get the body of L1 to be inserted in L0
-        BasicBlock* Body1 = getBody(L1);
+    // Ottieni il body di L1 da inserire in L0
+       BasicBlock* Body1 = getBody(L1);
 
-        // Exit block of L1 is the entry block of L0
-        BasicBlock* Exit0 = getEntryBlock(L0);
-        BasicBlock* Latch0 = L0->getLoopLatch();
-        BasicBlock* Header0 = L0->getHeader();
+       // Il blocco di uscita di L1 è il blocco di ingresso di L0
+       BasicBlock* Exit0 = getEntryBlock(L0);
+       BasicBlock* Latch0 = L0->getLoopLatch();
+       BasicBlock* Header0 = L0->getHeader();
 
-        BasicBlock* Exit1 = L1->getExitBlock();
-        BasicBlock* Latch1 = L1->getLoopLatch();
-        BasicBlock* Header1 = L1->getHeader();
+       BasicBlock* Exit1 = L1->getExitBlock();
+       BasicBlock* Latch1 = L1->getLoopLatch();
+       BasicBlock* Header1 = L1->getHeader();
 
     if (!Header0 || !Header1 || !Latch0 || !Latch1) {
-        errs() << "One of the key blocks is missing\n";
-        return false;
+       errs() << "Uno dei blocchi chiave manca\n";
+       return false;
     }
 
-    // 1. Modificare gli usi della induction variable nel body del
-    // loop 1 con quelli della induction variable del loop 0
+    // 1. Modifica gli usi della variabile di induzione nel body del
+    // loop 1 con quelli della variabile di induzione del loop 0
     // Trova le IV (phi node) nei due header
+    errs() << "Header0: " << *Header0 << "\n";
+    errs() << "Header1: " << *Header1 << "\n";
     PHINode *IV0 = dyn_cast<PHINode>(&Header0->front());
     PHINode *IV1 = dyn_cast<PHINode>(&Header1->front());
-    if (!IV0 || !IV1) {
-        errs() << "Failed to find induction variables\n";
-        return false;
+    if (!IV0) {
+       errs() << "Impossibile trovare la variabile di induzione L0\n";
+       return false;
     }
-    // Rimpiazza tutti gli usi dell'induction variable di L1 con quella di L0
+    if (!IV1) {
+       errs() << "Impossibile trovare la variabile di induzione L1\n";
+       return false;
+    }
+    // Sostituisci tutti gli usi della variabile di induzione di L1 con quella di L0
     IV1->replaceAllUsesWith(IV0);
 
-    //Link the terminator of the header of L0 to the body of L1
+    // Collega il terminatore dell'header di L0 al body di L1
     Header0->getTerminator()->replaceUsesOfWith(Exit0, Exit1);
 
-    // Predecessor blocks of Latch0 must now have Body1 as successor
+    // I blocchi predecessori di Latch0 devono ora avere Body1 come successore
     for (BasicBlock *Pred : predecessors(Latch0)) {
-        // Replace the successor of the predecessor with Body1
-        Pred->getTerminator()->replaceUsesOfWith(Latch0, Body1);
+       // Sostituisci il successore del predecessore con Body1
+       Pred->getTerminator()->replaceUsesOfWith(Latch0, Body1);
     }
 
     // I blocchi predecessori di Latch1 devono ora avere Latch0 come successore
     for (BasicBlock *Pred : predecessors(Latch1)) {
-        // Replace the successor of the predecessor with Latch0
-        Pred->getTerminator()->replaceUsesOfWith(Latch1, Latch0);
+       // Sostituisci il successore del predecessore con Latch0
+       Pred->getTerminator()->replaceUsesOfWith(Latch1, Latch0);
     }
 
-    //aggiungi i blocchi di L1 al loop di L0
+    // Aggiungi i blocchi di L1 al loop di L0
     for (BasicBlock *BB : L1->blocks()) {
-        if (BB != Header1 && BB != Latch1) {
-            L0->addBasicBlockToLoop(BB, LI);
-        }
+       if (BB != Header1 && BB != Latch1) {
+          L0->addBasicBlockToLoop(BB, LI);
+       }
     }
 
     LI.erase(L1); // Elimina il loop L1 dalla LoopInfo
     
-    // Controlla che L1 non ci sia più nella LoopInfo
+    // Controlla che L1 non sia più presente nella LoopInfo
     for (auto &L : LI) {
-        if (L == L1) {
-            errs() << "ERROR: Loop L1 still found in LoopInfo!\n";
-            break;
-        }
+       if (L == L1) {
+          errs() << "ERRORE: Loop L1 ancora presente in LoopInfo!\n";
+          break;
+       }
     }
-    errs() << "Confirmed: Loop L1 removed from LoopInfo.\n";
+    errs() << "Confermato: Loop L1 rimosso da LoopInfo.\n";
 
     return true;
 }
@@ -284,13 +314,15 @@ bool fuseLoops(Loop *L0, Loop *L1, LoopInfo &LI) {
 // New PM Registration
 //-----------------------------------------------------------------------------
 llvm::PassPluginLibraryInfo getTestPassPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "localOpts", LLVM_VERSION_STRING,
+  return {LLVM_PLUGIN_API_VERSION, "loopFusion", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "local-opts") {
+                  if (Name == "loop_fusion") {
                     FPM.addPass(TestPass());
+                    FPM.addPass(LoopSimplifyPass());
+                    // FPM.addPass(LoopRotatePass());
                     return true;
                   }
                   return false;

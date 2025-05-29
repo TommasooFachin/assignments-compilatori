@@ -486,8 +486,11 @@ CMakeFiles/loop_fusion.dir/loop_fusion.cpp.o: ../loop_fusion.cpp \
   /usr/include/llvm-19/llvm/IR/Dominators.h \
   /usr/include/llvm-19/llvm/ADT/DepthFirstIterator.h \
   /usr/include/llvm-19/llvm/Analysis/PostDominators.h \
-  /usr/include/llvm-19/llvm/Analysis/DependenceAnalysis.h
+  /usr/include/llvm-19/llvm/Analysis/DependenceAnalysis.h \
+  /usr/include/llvm-19/llvm/Transforms/Utils/BasicBlockUtils.h
 
+
+/usr/include/llvm-19/llvm/Transforms/Utils/BasicBlockUtils.h:
 
 /usr/include/llvm-19/llvm/Analysis/PostDominators.h:
 
