@@ -39,16 +39,23 @@ struct TestPass : PassInfoMixin<TestPass> {
         L->getExitBlocks(ExitBlocks);
 
         std::set<Instruction *> MovedInstructions;
-
+        
         // Esegui una ricerca depth-first sui blocchi del loop
         for (BasicBlock *BB : L->blocks()) {
+            std::vector<Instruction*> ToMove;
+
             for (Instruction &I : *BB) {
-                if (isCandidateForCodeMotion(I, L, ExitBlocks, DT, MovedInstructions)) {
-                    I.moveBefore(Preheader->getTerminator());
-                    MovedInstructions.insert(&I);
-                    errs() << "Moved instruction: " << I << "\n";
-                    Changed = true;
+                if (isCandidateForCodeMotion(I, L, BB, ExitBlocks, DT, MovedInstructions)) {
+                    ToMove.push_back(&I);
                 }
+            }
+
+            for (Instruction *I : ToMove) {
+                errs() << "Moving instruction: " << *I << " to the preheader of the loop.\n";
+                I->moveBefore(Preheader->getTerminator());
+                MovedInstructions.insert(I);
+                errs() << "The instruction has been moved correctly.\n";
+                Changed = true;
             }
         }
     }
@@ -57,81 +64,142 @@ struct TestPass : PassInfoMixin<TestPass> {
   }
 
   // Funzione per verificare se un'istruzione è loop-invariant
-  bool isLoopInvariant(Instruction &I, Loop *L) {
-      // Controlla se tutte le dipendenze dell'istruzione sono definite fuori dal loop
-      for (Value *Op : I.operands()) {
-          if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
-              if (L->contains(Inst))
-                  return false;
-          }
-      }
+bool isLoopInvariant(Instruction &I, Loop *L, DominatorTree &DT) {
+    errs() << "[DEBUG] Controllo loop-invariance per: " << I << "\n";
+    // Se l'istruzione non è nel loop, è invariante per definizione
+    if (!L->contains(&I)) {
+        errs() << "[DEBUG] Istruzione " << I << " non è nel loop, quindi è invariante.\n";
+        return true;
+    }
 
-      return true;
-  }
+    for (Value *Op : I.operands()) {
+        if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
+            errs() << "[DEBUG] Controllo operando: " << *Inst << "\n";
+            if (L->contains(Inst)) {
+                // Caso 1: Se l'operando non domina I, non è invariante
+                if (!DT.dominates(Inst, &I)) {
+                    errs() << "[DEBUG] Operando " << *Inst << " non domina " << I << ", quindi non è invariante.\n";
+                    return false;
+                }
+                // Caso 2: Verifica ricorsivamente l'operando
+                if (!isLoopInvariant(*Inst, L, DT)) {
+                    errs() << "[DEBUG] Operando " << *Inst << " non è invariante nel loop.\n";
+                    return false;
+                }
+            }
+        }
+    }
+    errs() << "[DEBUG] Istruzione " << I << " è loop-invariant.\n";
+    return true;
+}
 
-  // Funzione per verificare se un blocco domina tutte le uscite del loop
-  bool dominatesAllExits(BasicBlock *BB, const SmallVectorImpl<BasicBlock *> &ExitBlocks, DominatorTree &DT) {
-      for (BasicBlock *Exit : ExitBlocks) {
-          if (!DT.dominates(BB, Exit))
-              return false;
-      }
-      return true;
-  }
+// Funzione per verificare se un blocco domina tutte le uscite del loop
+bool dominatesAllExits(BasicBlock *BB, const SmallVectorImpl<BasicBlock *> &ExitBlocks, DominatorTree &DT) {
+    errs() << "[DEBUG] Controllo se il blocco " << BB->getName() << " domina tutte le uscite del loop.\n";
+    for (BasicBlock *Exit : ExitBlocks) {
+        errs() << "[DEBUG] Controllo uscita: " << Exit->getName() << "\n";
+        if (!DT.dominates(BB, Exit)) {
+            errs() << "[DEBUG] Il blocco " << BB->getName() << " NON domina l'uscita " << Exit->getName() << "\n";
+            return false;
+        }
+    }
+    errs() << "[DEBUG] Il blocco " << BB->getName() << " domina tutte le uscite del loop.\n";
+    return true;
+}
 
-  bool isReassignedInLoop(Instruction &I, Loop *L) {
-      if (StoreInst *Store = dyn_cast<StoreInst>(&I)) {
-          Value *Ptr = Store->getPointerOperand();
-          for (BasicBlock *BB : L->blocks()) {
-              for (Instruction &Inst : *BB) {
-                  if (&Inst != &I && isa<StoreInst>(&Inst)) {
-                      if (cast<StoreInst>(&Inst)->getPointerOperand() == Ptr)
-                          return true;
-                  }
-              }
-          }
-      }
-      return false;
-  }
+bool isReassignedInLoop(Instruction &I, Loop *L) {
+    errs() << "[DEBUG] Controllo se l'istruzione è riscritta nel loop: " << I << "\n";
+    if (StoreInst *Store = dyn_cast<StoreInst>(&I)) {
+        Value *Ptr = Store->getPointerOperand();
+        for (BasicBlock *BB : L->blocks()) {
+            for (Instruction &Inst : *BB) {
+                if (&Inst != &I && isa<StoreInst>(&Inst)) {
+                    if (cast<StoreInst>(&Inst)->getPointerOperand() == Ptr) {
+                        errs() << "[DEBUG] Trovata riscrittura su " << *Ptr << " in " << Inst << "\n";
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    errs() << "[DEBUG] Nessuna riscrittura trovata per " << I << "\n";
+    return false;
+}
 
-  bool dominatesAllUses(Instruction &I, Loop *L, DominatorTree &DT) {
-      for (User *U : I.users()) {
-          if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
-              if (L->contains(UserInst->getParent())) {
-                  if (!DT.dominates(I.getParent(), UserInst->getParent()))
-                      return false;
-              }
-          }
-      }
-      return true;
-  }
+bool dominatesAllUses(Instruction &I, Loop *L, DominatorTree &DT) {
+    errs() << "[DEBUG] Controllo se " << I << " domina tutti gli usi nel loop.\n";
+    for (User *U : I.users()) {
+        auto *UserInst = dyn_cast<Instruction>(U);
+        if (!UserInst) {
+            errs() << "[DEBUG] User non è un'istruzione, skip.\n";
+            continue;
+        }
+        errs() << "[DEBUG] Controllo uso in: " << *UserInst << "\n";
+        if (L->contains(UserInst->getParent())) {
+            if (!DT.dominates(I.getParent(), UserInst->getParent())) {
+                errs() << "[DEBUG] " << *I.getParent() << " NON domina " << *UserInst->getParent() << "\n";
+                return false;
+            }
+        }
+    }
+    errs() << "[DEBUG] " << I << " domina tutti gli usi nel loop.\n";
+    return true;
+}
 
-  bool allDependenciesMoved(Instruction &I, const std::set<Instruction *> &MovedInstructions) {
-      for (Value *Op : I.operands()) {
-          if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
-              if (MovedInstructions.find(Inst) == MovedInstructions.end())
-                  return false;
-          }
-      }
-      return true;
-  }
+bool allDependenciesMoved(Instruction &I, const std::set<Instruction *> &MovedInstructions) {
+    errs() << "[DEBUG] Controllo se tutte le dipendenze di " << I << " sono state già mosse.\n";
+    for (Value *Op : I.operands()) {
+        if (Instruction *Inst = dyn_cast<Instruction>(Op)) {
+            errs() << "[DEBUG] Dipendenza: " << *Inst << "\n";
+            if (MovedInstructions.find(Inst) == MovedInstructions.end()) {
+                errs() << "[DEBUG] Dipendenza NON soddisfatta: " << *Inst << "\n";
+                return false;
+            }
+        }
+    }
+    errs() << "[DEBUG] Tutte le dipendenze di " << I << " sono soddisfatte.\n";
+    return true;
+}
 
-  bool isCandidateForCodeMotion(Instruction &I, Loop *L, const SmallVectorImpl<BasicBlock *> &ExitBlocks, DominatorTree &DT, const std::set<Instruction *> &MovedInstructions) {
-      if (!isLoopInvariant(I, L))
-          return false;
+  bool isCandidateForCodeMotion(Instruction &I, Loop *L, BasicBlock *BB ,const SmallVectorImpl<BasicBlock *> &ExitBlocks, DominatorTree &DT, const std::set<Instruction *> &MovedInstructions) {
+    
+    // Ignora le istruzioni che non sono candidati per il code motion
+    if (isa<PHINode>(&I)) return false;
+    if (isa<llvm::BranchInst>(&I)) return false;
+    if (isa<llvm::CallInst>(&I)) return false;
+    if (isa<llvm::LoadInst>(&I)) return false;
+    if (isa<llvm::StoreInst>(&I)) return false;
+    if (isa<ICmpInst>(&I)) return false;
+    if (isa<FCmpInst>(&I)) return false;
+    if (I.isTerminator()) return false;
+    
+    if (!isLoopInvariant(I, L, DT)) {
+                errs() << "Istruzione non loop-invariant: " << I << "\n";
+                return false;
+        }
 
-      if (!dominatesAllExits(I.getParent(), ExitBlocks, DT))
-          return false;
+        if (!dominatesAllExits(BB, ExitBlocks, DT)) {
+                errs() << "Blocco non domina tutte le uscite del loop: " << *BB << "\n";
+                return false;
+        }
 
-      if (isReassignedInLoop(I, L))
-          return false;
+        if (isReassignedInLoop(I, L)) {
+                errs() << "Istruzione riscritta nel loop: " << I << "\n";
+                return false;   
+        }
 
-      if (!dominatesAllUses(I, L, DT))
-          return false;
+        if (!dominatesAllUses(I, L, DT)) {
+                errs() << "Istruzione " << I << " non domina tutti gli usi nel loop.\n";
+                return false;
+        }
 
-      if (!allDependenciesMoved(I, MovedInstructions))
-          return false;
+        if (!allDependenciesMoved(I, MovedInstructions)) {
+                errs() << "Dipendenze non soddisfatte per l'istruzione: " << I << "\n";
+                return false;
+        }
 
-      return true;
+        errs() << "Istruzione candidata per il code motion: " << I << "\n";
+        return true;
   }
 
   // Questo pass è richiesto per le funzioni con l'attributo optnone

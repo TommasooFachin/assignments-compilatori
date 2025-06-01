@@ -1,8 +1,8 @@
 file(REMOVE_RECURSE
   "CMakeFiles/code_motion.dir/code_motion.cpp.o"
   "CMakeFiles/code_motion.dir/code_motion.cpp.o.d"
-  "libcode_motion.dylib"
   "libcode_motion.pdb"
+  "libcode_motion.so"
 )
 
 # Per-language clean rules from dependency scanning.
